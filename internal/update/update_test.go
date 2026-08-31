@@ -236,11 +236,18 @@ func TestNoticeCachesAndReportsOnce(t *testing.T) {
 	}
 
 	// Within the interval the cache answers, without touching the network.
-	if msg := Notice(context.Background(), "v1.0.0", now.Add(time.Hour)); msg == "" {
+	// Expressed relative to Interval so tuning it does not silently turn this
+	// into a boundary test.
+	if msg := Notice(context.Background(), "v1.0.0", now.Add(Interval/2)); msg == "" {
 		t.Fatal("expected the cached notice to still report")
 	}
 	if hits != 1 {
 		t.Fatalf("expected the cache to be reused, saw %d API calls", hits)
+	}
+
+	// Exactly at the interval still counts as fresh; the check is strict.
+	if Notice(context.Background(), "v1.0.0", now.Add(Interval)); hits != 1 {
+		t.Fatalf("expected no refresh exactly at the interval, saw %d API calls", hits)
 	}
 
 	// Past the interval it re-checks.
@@ -252,7 +259,7 @@ func TestNoticeCachesAndReportsOnce(t *testing.T) {
 	}
 
 	// A current version gets no notice at all.
-	if msg := Notice(context.Background(), tag, now.Add(time.Hour)); msg != "" {
+	if msg := Notice(context.Background(), tag, now.Add(Interval/2)); msg != "" {
 		t.Fatalf("expected silence when up to date, got %q", msg)
 	}
 }

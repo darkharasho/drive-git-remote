@@ -1,7 +1,7 @@
 // Package update checks GitHub for newer releases and replaces the running
 // binary in place.
 //
-// The check is deliberately quiet: it runs at most once a day, only on an
+// The check is deliberately quiet: it runs at most once an hour, only on an
 // interactive terminal, times out fast, and treats every failure as "no news".
 // A version check is never worth interrupting real work over.
 package update
@@ -35,8 +35,10 @@ const Repo = "darkharasho/drive-git-remote"
 // APIBase is overridable so tests can point at a local server.
 var APIBase = "https://api.github.com"
 
-// Interval is how often the background check re-queries GitHub.
-const Interval = 24 * time.Hour
+// Interval is how often the check re-queries GitHub. At one request per hour
+// this stays far inside GitHub's anonymous limit of 60 per hour, even with a
+// token absent and several repos in play.
+const Interval = time.Hour
 
 // requestTimeout bounds the check so a slow network cannot stall a command.
 const requestTimeout = 3 * time.Second
