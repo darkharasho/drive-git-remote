@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/darkharasho/drive-git-remote/internal/auth"
 	"github.com/darkharasho/drive-git-remote/internal/gitx"
@@ -29,7 +30,7 @@ func NewRoot() *cobra.Command {
 		newSetupCmd(), newLoginCmd(), newLogoutCmd(), newWhoamiCmd(),
 		newInitCmd(), newCloneCmd(), newPushCmd(), newPullCmd(),
 		newListCmd(), newStatusCmd(), newRmCmd(), newUnlockCmd(), newGCCmd(),
-		newInstallHelperCmd(), newRemoteHelperCmd(),
+		newInstallHelperCmd(), newRemoteHelperCmd(), newUpdateCmd(),
 	)
 	return root
 }
@@ -43,7 +44,25 @@ func Execute() int {
 		}
 		return 1
 	}
+	// Only after a successful command, so a failure is never buried under an
+	// unrelated upgrade hint.
+	notify()
 	return 0
+}
+
+// isTerminal reports whether f is an interactive terminal. Scripts, pipes and
+// the remote helper all get no upgrade notices.
+func isTerminal(f *os.File) bool {
+	info, err := f.Stat()
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeCharDevice != 0
+}
+
+// contextWithTimeout bounds the update check independently of the command.
+func contextWithTimeout() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
 }
 
 // backend returns an authenticated Drive backend.

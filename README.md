@@ -147,6 +147,24 @@ Two layers of tests:
 
 CI runs the first two on Linux and macOS, and cross-compiles every release target on each push so a broken platform surfaces before tag time.
 
+## Staying current
+
+```sh
+drive-git update          # download, verify and install the latest release
+drive-git update --check  # just report what is available
+```
+
+`update` replaces the binary in place, after verifying its SHA-256 against the release's `checksums.txt` — a self-updater that installs an unverified download is worse than none. It resolves symlinks first, so the `git-remote-gdrive` link keeps pointing at the updated file.
+
+After a successful command, the CLI prints a one-line upgrade hint if a newer release exists. It's deliberately unobtrusive:
+
+- Checks GitHub at most **once per day**, cached in `~/.config/drive-git-remote/update-check.json`.
+- Writes to **stderr**, never stdout, so piped output stays clean.
+- Skipped entirely when stderr isn't a terminal — scripts, cron, and the remote helper never see it.
+- Skipped for development builds, whose versions aren't comparable to release tags.
+- Any failure is silent. A version check is never worth interrupting work over.
+- `DRIVE_GIT_NO_UPDATE_CHECK=1` turns it off.
+
 ## Releasing
 
 ```sh
