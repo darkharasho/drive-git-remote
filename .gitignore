@@ -1,0 +1,13 @@
+node_modules
+.env
+.env.*
+.DS_Store
+dist
+build
+
+# Built binaries, anchored to the repo root so they do not match cmd/drive-git/
+/drive-git
+/git-remote-gdrive
+*.log
+.superpowers
+.sai/
