@@ -7,7 +7,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -80,36 +79,85 @@ func sha256hex(b []byte) string {
 	return hex.EncodeToString(s[:])
 }
 
-// releaseServer stands in for the GitHub API.
+// releaseMux mimics the parts of github.com we rely on: /releases/latest
+// redirects to the tag page, and assets live under /releases/download/<tag>/.
+// hits counts redirect lookups so tests can assert on caching.
+func releaseMux(tag string, files map[string][]byte, hits *int) *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/"+Repo+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		if hits != nil {
+			*hits++
+		}
+		if tag == "" { // a repo with no releases does not redirect
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.Redirect(w, r, "/"+Repo+"/releases/tag/"+tag, http.StatusFound)
+	})
+	mux.HandleFunc("/"+Repo+"/releases/tag/"+tag, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	mux.HandleFunc("/"+Repo+"/releases/download/"+tag+"/", func(w http.ResponseWriter, r *http.Request) {
+		body, ok := files[strings.TrimPrefix(r.URL.Path, "/"+Repo+"/releases/download/"+tag+"/")]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		w.Write(body)
+	})
+	return mux
+}
+
 func releaseServer(t *testing.T, tag string, archive, sums []byte) *httptest.Server {
 	t.Helper()
-	mux := http.NewServeMux()
-	var srv *httptest.Server
-	mux.HandleFunc("/repos/"+Repo+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"tag_name":%q,"assets":[
-			{"name":%q,"url":"%s/asset/archive"},
-			{"name":"checksums.txt","url":"%s/asset/sums"}]}`,
-			tag, assetName(tag), srv.URL, srv.URL)
-	})
-	mux.HandleFunc("/asset/archive", func(w http.ResponseWriter, r *http.Request) { w.Write(archive) })
-	mux.HandleFunc("/asset/sums", func(w http.ResponseWriter, r *http.Request) { w.Write(sums) })
-	srv = httptest.NewServer(mux)
+	srv := httptest.NewServer(releaseMux(tag, map[string][]byte{
+		assetName(tag):  archive,
+		"checksums.txt": sums,
+	}, nil))
 	t.Cleanup(srv.Close)
 	return srv
 }
 
-// sandbox points config and the API at throwaway locations.
-func sandbox(t *testing.T, apiBase string) {
+// sandbox points config and GitHub at throwaway locations.
+func sandbox(t *testing.T, base string) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	t.Setenv("DRIVE_GIT_NO_UPDATE_CHECK", "")
-	// Do not let a real gh credential or CI token leak into the test.
-	t.Setenv("DRIVE_GIT_GITHUB_TOKEN", "")
-	t.Setenv("GH_TOKEN", "")
-	t.Setenv("GITHUB_TOKEN", "")
-	old := APIBase
-	APIBase = apiBase
-	t.Cleanup(func() { APIBase = old })
+	old := GitHubBase
+	GitHubBase = base
+	t.Cleanup(func() { GitHubBase = old })
+}
+
+// TestLatestResolvesViaRedirect covers the reason this does not use
+// api.github.com: that host is rate limited and sometimes blocked outright.
+func TestLatestResolvesViaRedirect(t *testing.T) {
+	srv := releaseServer(t, "v1.2.3", nil, nil)
+	sandbox(t, srv.URL)
+
+	rel, err := Latest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rel.TagName != "v1.2.3" {
+		t.Fatalf("expected v1.2.3, got %q", rel.TagName)
+	}
+	want := srv.URL + "/" + Repo + "/releases/download/v1.2.3/checksums.txt"
+	if got := rel.assetURL("checksums.txt"); got != want {
+		t.Fatalf("asset URL:\n  got  %s\n  want %s", got, want)
+	}
+}
+
+// TestLatestWithNoReleases: without a release there is no redirect, so there
+// is no tag in the final URL.
+func TestLatestWithNoReleases(t *testing.T) {
+	srv := httptest.NewServer(releaseMux("", nil, nil))
+	defer srv.Close()
+	sandbox(t, srv.URL)
+
+	if _, err := Latest(context.Background()); err == nil ||
+		!strings.Contains(err.Error(), "no published releases") {
+		t.Fatalf("expected a no-releases error, got %v", err)
+	}
 }
 
 func TestApplyReplacesBinary(t *testing.T) {
@@ -197,14 +245,10 @@ func TestVerifyRejectsTamperedArchive(t *testing.T) {
 
 func TestApplyRefusesWithoutChecksums(t *testing.T) {
 	tag := "v9.9.9"
-	archive := buildArchive(t, "x")
-	mux := http.NewServeMux()
-	var srv *httptest.Server
-	mux.HandleFunc("/repos/"+Repo+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprintf(w, `{"tag_name":%q,"assets":[{"name":%q,"url":"%s/a"}]}`, tag, assetName(tag), srv.URL)
-	})
-	mux.HandleFunc("/a", func(w http.ResponseWriter, r *http.Request) { w.Write(archive) })
-	srv = httptest.NewServer(mux)
+	// Archive present, checksums.txt absent.
+	srv := httptest.NewServer(releaseMux(tag, map[string][]byte{
+		assetName(tag): buildArchive(t, "x"),
+	}, nil))
 	defer srv.Close()
 	sandbox(t, srv.URL)
 
@@ -214,15 +258,24 @@ func TestApplyRefusesWithoutChecksums(t *testing.T) {
 	}
 }
 
+func TestApplyReportsMissingPlatformBuild(t *testing.T) {
+	tag := "v9.9.9"
+	srv := httptest.NewServer(releaseMux(tag, map[string][]byte{
+		"checksums.txt": []byte("abc  something-else\n"),
+	}, nil))
+	defer srv.Close()
+	sandbox(t, srv.URL)
+
+	_, err := Apply(context.Background(), "v0.0.1", false)
+	if err == nil || !strings.Contains(err.Error(), "no build for") {
+		t.Fatalf("expected a missing-build error, got %v", err)
+	}
+}
+
 func TestNoticeCachesAndReportsOnce(t *testing.T) {
 	tag := "v9.9.9"
 	var hits int
-	mux := http.NewServeMux()
-	mux.HandleFunc("/repos/"+Repo+"/releases/latest", func(w http.ResponseWriter, r *http.Request) {
-		hits++
-		fmt.Fprintf(w, `{"tag_name":%q,"assets":[]}`, tag)
-	})
-	srv := httptest.NewServer(mux)
+	srv := httptest.NewServer(releaseMux(tag, nil, &hits))
 	defer srv.Close()
 	sandbox(t, srv.URL)
 

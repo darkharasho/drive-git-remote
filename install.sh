@@ -41,10 +41,19 @@ esac
 # --- resolve version ----------------------------------------------------
 if [ -z "$VERSION" ]; then
 	say "Finding the latest release..."
-	VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/latest" \
-		| sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-		| head -1)
-	[ -n "$VERSION" ] || die "could not determine the latest release; set VERSION=vX.Y.Z to pin one"
+	# Resolved by following github.com's /releases/latest redirect rather than
+	# asking api.github.com. The API allows only 60 anonymous requests per hour
+	# per IP — easily exhausted behind shared addresses or a corporate NAT — and
+	# is a separate host that proxies sometimes block. This uses the same host
+	# the downloads come from, with no rate limit.
+	VERSION=$(curl -fsL -o /dev/null -w '%{url_effective}' \
+		"https://github.com/$REPO/releases/latest" 2>/dev/null \
+		| sed -n 's|.*/releases/tag/||p')
+	case "$VERSION" in
+		"" | */*)
+			die "could not determine the latest release
+  set VERSION=vX.Y.Z to pin one, or see https://github.com/$REPO/releases" ;;
+	esac
 fi
 
 archive="drive-git_${VERSION}_${os}_${arch}.tar.gz"

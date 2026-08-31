@@ -19,7 +19,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -32,8 +31,8 @@ import (
 // Repo is the GitHub repository releases are published to.
 const Repo = "darkharasho/drive-git-remote"
 
-// APIBase is overridable so tests can point at a local server.
-var APIBase = "https://api.github.com"
+// GitHubBase is overridable so tests can point at a local server.
+var GitHubBase = "https://github.com"
 
 // Interval is how often the check re-queries GitHub. At one request per hour
 // this stays far inside GitHub's anonymous limit of 60 per hour, even with a
@@ -46,75 +45,51 @@ const requestTimeout = 3 * time.Second
 // EnvDisable turns the automatic check off entirely.
 const EnvDisable = "DRIVE_GIT_NO_UPDATE_CHECK"
 
-// Asset is a release artifact. URL is the API URL rather than the browser
-// one, because that form works for private repositories too.
-type Asset struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
-
-// Release is the subset of GitHub's release payload we use.
+// Release identifies a published release.
 type Release struct {
-	TagName string  `json:"tag_name"`
-	Assets  []Asset `json:"assets"`
+	TagName string
 }
 
-// token returns a GitHub token if one is available. The repository is public,
-// so this is not required — it raises the anonymous 60-requests-per-hour API
-// limit, and keeps the tool working if the repo is ever made private.
-func token() string {
-	for _, key := range []string{"DRIVE_GIT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
-		if v := os.Getenv(key); v != "" {
-			return v
-		}
-	}
-	if _, err := exec.LookPath("gh"); err == nil {
-		out, err := exec.Command("gh", "auth", "token").Output()
-		if err == nil {
-			return strings.TrimSpace(string(out))
-		}
-	}
-	return ""
+// assetURL is the download URL for one of the release's files.
+func (r Release) assetURL(name string) string {
+	return fmt.Sprintf("%s/%s/releases/download/%s/%s", GitHubBase, Repo, r.TagName, name)
 }
 
-func request(ctx context.Context, method, url, accept string) (*http.Response, error) {
+func request(ctx context.Context, method, url string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", accept)
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	if t := token(); t != "" {
-		req.Header.Set("Authorization", "Bearer "+t)
-	}
 	return http.DefaultClient.Do(req)
 }
 
-// Latest fetches the most recent published release.
+// Latest resolves the most recent published release.
+//
+// This follows github.com's /releases/latest redirect rather than querying
+// api.github.com. The API permits only 60 anonymous requests per hour per IP,
+// which a shared address or corporate NAT exhausts easily, and it is a
+// separate host that restrictive networks sometimes block outright. Resolving
+// through github.com uses the same host the downloads come from: if a machine
+// can install, it can check.
 func Latest(ctx context.Context) (*Release, error) {
-	url := fmt.Sprintf("%s/repos/%s/releases/latest", APIBase, Repo)
-	res, err := request(ctx, http.MethodGet, url, "application/vnd.github+json")
+	url := fmt.Sprintf("%s/%s/releases/latest", GitHubBase, Repo)
+	res, err := request(ctx, http.MethodHead, url)
 	if err != nil {
 		return nil, err
 	}
 	defer res.Body.Close()
-	switch res.StatusCode {
-	case http.StatusOK:
-	case http.StatusNotFound:
-		// Also what a private repo looks like without a token, but for a
-		// public one this simply means nothing has been tagged yet.
+	if res.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("looking up the latest release: GitHub returned %s", res.Status)
+	}
+
+	// After redirects, the final URL is .../releases/tag/<tag>. A repo with no
+	// releases does not redirect, so the marker is simply absent.
+	final := res.Request.URL.String()
+	_, tag, found := strings.Cut(final, "/releases/tag/")
+	if !found || tag == "" || strings.Contains(tag, "/") {
 		return nil, fmt.Errorf("no published releases for %s yet", Repo)
-	default:
-		return nil, fmt.Errorf("GitHub returned %s", res.Status)
 	}
-	var r Release
-	if err := json.NewDecoder(res.Body).Decode(&r); err != nil {
-		return nil, err
-	}
-	if r.TagName == "" {
-		return nil, fmt.Errorf("release has no tag")
-	}
-	return &r, nil
+	return &Release{TagName: tag}, nil
 }
 
 // ParseVersion reads a vX.Y.Z tag. Development builds report a commit sha or
@@ -251,7 +226,7 @@ func binaryName() string {
 }
 
 func download(ctx context.Context, url string) ([]byte, error) {
-	res, err := request(ctx, http.MethodGet, url, "application/octet-stream")
+	res, err := request(ctx, http.MethodGet, url)
 	if err != nil {
 		return nil, err
 	}
@@ -389,30 +364,14 @@ func Apply(ctx context.Context, current string, force bool) (*Result, error) {
 
 	// Release archives are named with the full tag, "v" included.
 	name := assetName(rel.TagName)
-	var archiveURL, sumsURL string
-	for _, a := range rel.Assets {
-		switch a.Name {
-		case name:
-			archiveURL = a.URL
-		case "checksums.txt":
-			sumsURL = a.URL
-		}
-	}
-	if archiveURL == "" {
+	archive, err := download(ctx, rel.assetURL(name))
+	if err != nil {
 		return nil, fmt.Errorf("release %s has no build for %s/%s (expected %s)",
 			rel.TagName, runtime.GOOS, runtime.GOARCH, name)
 	}
-	if sumsURL == "" {
+	sums, err := download(ctx, rel.assetURL("checksums.txt"))
+	if err != nil {
 		return nil, fmt.Errorf("release %s has no checksums.txt; refusing to install an unverified binary", rel.TagName)
-	}
-
-	archive, err := download(ctx, archiveURL)
-	if err != nil {
-		return nil, err
-	}
-	sums, err := download(ctx, sumsURL)
-	if err != nil {
-		return nil, err
 	}
 	if err := verify(sums, name, archive); err != nil {
 		return nil, err

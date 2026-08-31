@@ -193,7 +193,8 @@ drive-git update --check  # just report what is available
 
 After a successful command, the CLI prints a one-line upgrade hint if a newer release exists. It's deliberately unobtrusive:
 
-- Checks GitHub at most **once an hour**, cached in `~/.config/drive-git-remote/update-check.json`.
+- Checks at most **once an hour**, cached in `~/.config/drive-git-remote/update-check.json`.
+- Resolves the latest version by following `github.com`'s `/releases/latest` redirect rather than querying `api.github.com`, which is rate limited to 60 anonymous requests per hour per IP and is a separate host that restrictive networks sometimes block. Same host as the downloads: if a machine can install, it can check.
 - Writes to **stderr**, never stdout, so piped output stays clean.
 - Skipped entirely when stderr isn't a terminal — scripts, cron, and the remote helper never see it.
 - Skipped for development builds, whose versions aren't comparable to release tags.
