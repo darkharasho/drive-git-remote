@@ -11,13 +11,14 @@ import (
 	"github.com/darkharasho/drive-git-remote/internal/config"
 	"github.com/darkharasho/drive-git-remote/internal/crypto"
 	"github.com/darkharasho/drive-git-remote/internal/gitx"
+	"github.com/darkharasho/drive-git-remote/internal/session"
 	"github.com/darkharasho/drive-git-remote/internal/store"
 	"github.com/spf13/cobra"
 )
 
 func newInitCmd() *cobra.Command {
 	var name string
-	var noEncrypt bool
+	var encrypt bool
 	cmd := &cobra.Command{
 		Use:   "init",
 		Short: "Create a Drive folder for the current repo and push it",
@@ -57,7 +58,7 @@ func newInitCmd() *cobra.Command {
 			meta.DefaultBranch, _ = g.CurrentBranch()
 
 			r := &store.Repo{Backend: b, Git: g}
-			if !noEncrypt {
+			if encrypt {
 				p, err := config.KeyPath()
 				if err != nil {
 					return err
@@ -100,7 +101,8 @@ func newInitCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&name, "name", "", "repo name in Drive (default: directory name)")
-	cmd.Flags().BoolVar(&noEncrypt, "no-encrypt", false, "store bundles unencrypted")
+	cmd.Flags().BoolVar(&encrypt, "encrypt", false,
+		"encrypt bundles client-side with age (set once, at init; cannot be changed later)")
 	return cmd
 }
 
@@ -309,6 +311,59 @@ func newListCmd() *cobra.Command {
 			return nil
 		},
 	}
+}
+
+func newRmCmd() *cobra.Command {
+	var yes bool
+	cmd := &cobra.Command{
+		Use:   "rm <name>",
+		Short: "Remove a repo from Drive",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			ctx := cmd.Context()
+			name := args[0]
+			b, err := backend(ctx)
+			if err != nil {
+				return err
+			}
+			folderID, err := session.FindRepoFolder(ctx, b, name)
+			if err != nil {
+				return err
+			}
+			links, err := store.CountLinks(ctx, b, folderID)
+			if err != nil {
+				return err
+			}
+
+			_, trashable := b.(store.Trasher)
+			if !yes {
+				fmt.Printf("%s holds %d link(s) of history.\n", name, links)
+				if trashable {
+					fmt.Println("It will go to Drive's trash, where it is recoverable for 30 days.")
+				} else {
+					fmt.Println("This backend has no trash: removal is permanent.")
+				}
+				if !confirm(fmt.Sprintf("Remove %q?", name)) {
+					fmt.Println("Left alone.")
+					return nil
+				}
+			}
+
+			recoverable, err := store.RemoveRepo(ctx, b, folderID)
+			if err != nil {
+				return err
+			}
+			if recoverable {
+				fmt.Printf("Moved %s to Drive's trash.\n", name)
+			} else {
+				fmt.Printf("Deleted %s.\n", name)
+			}
+			fmt.Println("Local clones are untouched; they still hold the full history.")
+			return nil
+		},
+	}
+	cmd.Flags().BoolVarP(&yes, "yes", "y", false, "skip the confirmation prompt")
+	return cmd
 }
 
 func newStatusCmd() *cobra.Command {

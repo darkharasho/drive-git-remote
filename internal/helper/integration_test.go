@@ -124,7 +124,7 @@ func (e *env) readFile(dir, name string) string {
 func TestGitCloneAndPushThroughHelper(t *testing.T) {
 	e := setup(t)
 	src := e.newRepo("scripts")
-	e.run(src, e.bin, "init", "--no-encrypt", "--name", "scripts")
+	e.run(src, e.bin, "init", "--name", "scripts")
 
 	// Clone with plain git, via the gdrive:// URL.
 	work := t.TempDir()
@@ -149,6 +149,32 @@ func TestGitCloneAndPushThroughHelper(t *testing.T) {
 	if got := e.readFile(src, "extra.sh"); got != "echo two\n" {
 		t.Fatalf("pushed content did not round trip: %q", got)
 	}
+
+	// Encryption is opt-in, so these links are plain bundles.
+	for _, name := range e.storedLinks("scripts") {
+		if strings.HasSuffix(name, ".age") {
+			t.Fatalf("expected unencrypted links by default, found %s", name)
+		}
+	}
+}
+
+// storedLinks lists the link filenames a repo has in the store.
+func (e *env) storedLinks(repo string) []string {
+	e.t.Helper()
+	entries, err := os.ReadDir(filepath.Join(e.store, "drive-git-remote", repo))
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	var out []string
+	for _, entry := range entries {
+		if strings.Contains(entry.Name(), ".bundle") || strings.Contains(entry.Name(), ".refs") {
+			out = append(out, entry.Name())
+		}
+	}
+	if len(out) == 0 {
+		e.t.Fatalf("no links found for %s", repo)
+	}
+	return out
 }
 
 // TestHelperRejectsNonFastForward checks the push path refuses to clobber
@@ -156,7 +182,7 @@ func TestGitCloneAndPushThroughHelper(t *testing.T) {
 func TestHelperRejectsNonFastForward(t *testing.T) {
 	e := setup(t)
 	src := e.newRepo("scripts")
-	e.run(src, e.bin, "init", "--no-encrypt", "--name", "scripts")
+	e.run(src, e.bin, "init", "--name", "scripts")
 
 	work := t.TempDir()
 	e.run(work, "git", "clone", "gdrive://scripts", "clone")
@@ -189,7 +215,7 @@ func TestHelperRejectsNonFastForward(t *testing.T) {
 func TestHelperRenameAndDeleteRefspecs(t *testing.T) {
 	e := setup(t)
 	src := e.newRepo("scripts")
-	e.run(src, e.bin, "init", "--no-encrypt", "--name", "scripts")
+	e.run(src, e.bin, "init", "--name", "scripts")
 
 	// Push local main to a differently named remote branch.
 	e.run(src, "git", "push", "gdrive", "main:trunk")
@@ -215,11 +241,12 @@ func TestHelperRenameAndDeleteRefspecs(t *testing.T) {
 	}
 }
 
-// TestHelperWorksWithEncryptedRepo checks the helper path through age.
+// TestHelperWorksWithEncryptedRepo checks the helper path through age, which
+// is opt-in via --encrypt.
 func TestHelperWorksWithEncryptedRepo(t *testing.T) {
 	e := setup(t)
 	src := e.newRepo("scripts")
-	e.run(src, e.bin, "init", "--name", "scripts")
+	e.run(src, e.bin, "init", "--encrypt", "--name", "scripts")
 
 	work := t.TempDir()
 	e.run(work, "git", "clone", "gdrive://scripts", "clone")

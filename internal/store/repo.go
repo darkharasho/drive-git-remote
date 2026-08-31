@@ -513,6 +513,66 @@ func (r *Repo) Compact(ctx context.Context) (string, error) {
 	return name, nil
 }
 
+// RemoveRepo deletes a repo folder and everything under it, reporting whether
+// the removal is recoverable. Backends with a trash get the folder trashed;
+// the rest are deleted depth-first, since a folder cannot be removed while it
+// still has children.
+func RemoveRepo(ctx context.Context, b Backend, folderID string) (recoverable bool, err error) {
+	if t, ok := b.(Trasher); ok {
+		return true, t.Trash(ctx, folderID)
+	}
+	return false, deleteTree(ctx, b, folderID)
+}
+
+func deleteTree(ctx context.Context, b Backend, folderID string) error {
+	files, err := b.List(ctx, folderID)
+	if err != nil {
+		return err
+	}
+	for _, f := range files {
+		if f.Folder {
+			if err := deleteTree(ctx, b, f.ID); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := b.Delete(ctx, f.ID); err != nil {
+			return fmt.Errorf("deleting %s: %w", f.Name, err)
+		}
+	}
+	return b.Delete(ctx, folderID)
+}
+
+// CountLinks reports how many chain links a repo folder holds, including any
+// archived by compaction, for confirmation prompts.
+func CountLinks(ctx context.Context, b Backend, folderID string) (int, error) {
+	files, err := b.List(ctx, folderID)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	for _, f := range files {
+		if f.Folder {
+			if f.Name == ArchiveFolder {
+				archived, err := b.List(ctx, f.ID)
+				if err != nil {
+					return 0, err
+				}
+				for _, a := range archived {
+					if _, ok := ParseLink(a); ok {
+						n++
+					}
+				}
+			}
+			continue
+		}
+		if _, ok := ParseLink(f); ok {
+			n++
+		}
+	}
+	return n, nil
+}
+
 // CloneInto initialises dir as a git repo and replays the chain into it.
 func (r *Repo) CloneInto(ctx context.Context, dir string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {

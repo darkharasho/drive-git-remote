@@ -28,7 +28,7 @@ func NewRoot() *cobra.Command {
 	root.AddCommand(
 		newSetupCmd(), newLoginCmd(), newLogoutCmd(), newWhoamiCmd(),
 		newInitCmd(), newCloneCmd(), newPushCmd(), newPullCmd(),
-		newListCmd(), newStatusCmd(), newUnlockCmd(), newGCCmd(),
+		newListCmd(), newStatusCmd(), newRmCmd(), newUnlockCmd(), newGCCmd(),
 		newInstallHelperCmd(), newRemoteHelperCmd(),
 	)
 	return root

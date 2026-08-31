@@ -46,8 +46,10 @@ cd ~/scripts
 git init && git add . && git commit -m "initial"
 
 drive-git init            # creates drive-git-remote/scripts in Drive and pushes
+drive-git init --encrypt  # ...with client-side encryption
 drive-git status          # compare local, last-synced, and remote state
 drive-git list            # repos stored in Drive
+drive-git rm scripts      # remove a repo (goes to Drive's trash)
 drive-git unlock          # break a stale push lock
 drive-git gc              # compact the remote chain
 ```
@@ -96,14 +98,17 @@ git fetch ./0001-root-3f2a91c4d8be.bundle 'refs/drive/heads/*:refs/heads/*'
 
 `pull` fetches into `refs/drive/*` and then fast-forwards **only the current branch**, and only when the working tree is clean. It never auto-merges and never touches other branches. If you've diverged, it says so and leaves you to resolve it with ordinary `git rebase`/`git merge` against `refs/drive/heads/<branch>`. Use `--fetch-only` to skip the merge entirely.
 
-## Encryption
+## Encryption (optional)
 
-Bundles are encrypted client-side with [age](https://age-encryption.org) by default. The key lives at `~/.config/drive-git-remote/key.age`.
+Bundles are stored unencrypted by default. The security boundary is your Google account: the CLI holds only the `drive.file` scope, so it can see the files it created and nothing else, and those files live in your personal Drive.
 
-- **Back that key up.** Without it, the bundles cannot be decrypted.
+`drive-git init --encrypt` adds client-side [age](https://age-encryption.org) encryption on top of that, which protects against Drive itself and against an account compromise. If you turn it on:
+
+- **Back up `~/.config/drive-git-remote/key.age`.** Without it the bundles cannot be decrypted, by you or anyone.
 - Copy it to any other machine you clone from.
-- Filenames and sizes are still visible to Drive; this is defence in depth, not full metadata privacy.
-- `drive-git init --no-encrypt` opts out per repo.
+- Filenames and sizes stay visible to Drive; this is defence in depth, not metadata privacy.
+
+Encryption is fixed at `init` and recorded in `meta.json`. There's no converting a repo afterwards — re-create it and push again.
 
 ## Moving to a normal git remote
 

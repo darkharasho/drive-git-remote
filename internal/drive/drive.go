@@ -195,6 +195,15 @@ func (b *Backend) Delete(ctx context.Context, id string) error {
 	})
 }
 
+// Trash moves a file to Drive's trash, where it stays recoverable for 30 days.
+func (b *Backend) Trash(ctx context.Context, id string) error {
+	return retry(ctx, "trashing file", func() error {
+		_, err := b.svc.Files.Update(id, &gdrive.File{Trashed: true}).
+			Fields("id").Context(ctx).Do()
+		return err
+	})
+}
+
 // Move reparents a file.
 func (b *Backend) Move(ctx context.Context, id, newParentID string) error {
 	var current string

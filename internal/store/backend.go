@@ -38,3 +38,12 @@ type Backend interface {
 	// Move reparents a file.
 	Move(ctx context.Context, id, newParentID string) error
 }
+
+// Trasher is an optional Backend capability for recoverable deletion. Drive
+// implements it; removing a repo puts it in Drive's trash, where it can be
+// restored for 30 days, rather than destroying it outright. Backends without
+// a trash (the local directory one) simply do not implement this, and callers
+// fall back to Delete.
+type Trasher interface {
+	Trash(ctx context.Context, id string) error
+}

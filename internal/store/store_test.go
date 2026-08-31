@@ -358,6 +358,75 @@ func TestLockBlocksAndExpires(t *testing.T) {
 	}
 }
 
+// trashingBackend adds the optional Trasher capability, as Drive has.
+type trashingBackend struct {
+	*fakeBackend
+	trashed []string
+}
+
+func (b *trashingBackend) Trash(_ context.Context, id string) error {
+	b.trashed = append(b.trashed, id)
+	return nil
+}
+
+func TestRemoveRepoPrefersTrash(t *testing.T) {
+	ctx := context.Background()
+	b, folderID := newRemote(t)
+	tb := &trashingBackend{fakeBackend: b}
+
+	a := newRepo(t, tb, folderID)
+	commit(t, a, "a.txt", "one\n")
+	mustPush(t, a)
+
+	recoverable, err := RemoveRepo(ctx, tb, folderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !recoverable {
+		t.Fatal("a backend with a trash should report the removal as recoverable")
+	}
+	if len(tb.trashed) != 1 || tb.trashed[0] != folderID {
+		t.Fatalf("expected the folder itself to be trashed, got %v", tb.trashed)
+	}
+	// Trashing must not destroy anything: the contents are still there to
+	// restore alongside the folder.
+	if files, _ := tb.List(ctx, folderID); len(files) == 0 {
+		t.Fatal("trashing should leave contents intact")
+	}
+}
+
+func TestRemoveRepoDeletesWhenNoTrash(t *testing.T) {
+	ctx := context.Background()
+	b, folderID := newRemote(t)
+
+	a := newRepo(t, b, folderID)
+	for _, name := range []string{"one.txt", "two.txt"} {
+		commit(t, a, name, name+"\n")
+		mustPush(t, a)
+	}
+	if _, err := a.Compact(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Compaction leaves an archive subfolder, so removal has to recurse.
+	if n, err := CountLinks(ctx, b, folderID); err != nil || n != 3 {
+		t.Fatalf("expected 3 links counted across the folder and archive, got %d (%v)", n, err)
+	}
+
+	recoverable, err := RemoveRepo(ctx, b, folderID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recoverable {
+		t.Fatal("a backend without a trash should report permanent removal")
+	}
+	if files, _ := b.List(ctx, folderID); len(files) != 0 {
+		t.Fatalf("expected the folder emptied, found %v", files)
+	}
+	if _, ok := b.files[folderID]; ok {
+		t.Fatal("expected the folder itself removed")
+	}
+}
+
 func TestBuildChainDetectsFork(t *testing.T) {
 	files := []File{
 		{ID: "1", Name: "0001-root-aaaaaaaaaaaa.bundle"},
