@@ -2,37 +2,70 @@
 
 [![CI](https://github.com/darkharasho/drive-git-remote/actions/workflows/ci.yml/badge.svg)](https://github.com/darkharasho/drive-git-remote/actions/workflows/ci.yml)
 
-A small Go CLI that uses a private Google Drive folder as a git remote, so personal work scripts and productivity apps can be version-controlled without pushing repos to the org's GitHub. Working folders stay ordinary local git repos, so branches, diffs, and history come free.
+Use a private Google Drive folder as a git remote.
+
+Your repositories stay ordinary local git repos — real branches, real diffs, real history — while Drive holds the remote. Nothing is reinvented: pushes are `git bundle`s, and the whole thing is a single static binary that also serves as a git remote helper, so `git clone gdrive://notes` and plain `git push` just work.
+
+Useful when you want somewhere private to keep repos you don't want on a hosting service, synced across your own machines, using storage you already have.
 
 ## Install
 
-From a [release](https://github.com/darkharasho/drive-git-remote/releases) — one static binary, no runtime:
-
 ```sh
-tar -xzf drive-git_v1.0.0_darwin_arm64.tar.gz
-mv drive-git ~/.local/bin/
+curl -fsSL https://raw.githubusercontent.com/darkharasho/drive-git-remote/main/install.sh | sh
 ```
 
-Or from source:
+That detects your platform, verifies the download's checksum, installs to `~/.local/bin`, and sets up the `git-remote-gdrive` helper. To read it first — a fair instinct for anything piped to a shell:
 
 ```sh
-make install     # builds and installs to ~/.local/bin, then installs the helper
+curl -fsSL https://raw.githubusercontent.com/darkharasho/drive-git-remote/main/install.sh -o install.sh
+less install.sh && sh install.sh
 ```
+
+`PREFIX=/usr/local/bin` to install elsewhere, `VERSION=v0.1.0` to pin a release.
+
+<details>
+<summary>Other ways</summary>
+
+**Manual** — grab an archive from [releases](https://github.com/darkharasho/drive-git-remote/releases):
+
+```sh
+tar -xzf drive-git_v0.1.0_darwin_arm64.tar.gz
+mv drive-git ~/.local/bin/ && drive-git install-helper
+```
+
+**With Go:**
+
+```sh
+go install github.com/darkharasho/drive-git-remote/cmd/drive-git@latest
+drive-git install-helper
+```
+
+**From source:**
+
+```sh
+git clone https://github.com/darkharasho/drive-git-remote && cd drive-git-remote
+make install    # builds, installs to ~/.local/bin, sets up the helper
+```
+
+Windows: download the `.zip` from releases. The CLI works; `install-helper` uses symlinks, so put `git-remote-gdrive.exe` on your PATH by copying the binary under that name.
+
+</details>
+
+Upgrading later is just `drive-git update`.
 
 ## First run
 
 ```sh
-drive-git setup           # walks you through creating your own OAuth desktop client
-drive-git login           # loopback browser sign-in, token cached at 0600
-drive-git install-helper  # so plain git commands work against gdrive:// URLs
+drive-git setup    # walks you through creating your own Google OAuth client
+drive-git login    # browser sign-in, token cached at 0600
 ```
 
-`setup` guides you through a personal Google Cloud project so no credentials are shared and nothing touches org infrastructure. The CLI requests only the `drive.file` scope, which grants access to files it creates and nothing else in your Drive.
+`setup` walks you through a Google Cloud project of your own, so the credentials are yours and shared with nobody. The CLI requests only the `drive.file` scope, which grants access to files it creates and nothing else in your Drive.
 
-Two things worth knowing about the Google side:
+Three things worth knowing about the Google side:
 
-- **Leave the app in "Testing"** and add yourself as a test user. Publishing an External app to production requires a homepage and privacy policy on a domain you've verified in Search Console — not worth it for a personal tool.
-- The cost of staying in Testing is that Google expires refresh tokens after **7 days**, so `drive-git login` needs re-running about weekly. The CLI detects this and says so explicitly rather than surfacing a raw OAuth error.
+- **Leave the app in "Testing"** and add your account as a test user. Publishing an External app to production requires a homepage and privacy policy on a domain you've verified in Search Console — a lot of ceremony for a personal tool.
+- The cost of staying in Testing is that Google expires refresh tokens after **7 days**, so `drive-git login` needs re-running about weekly. The CLI detects this and says so plainly rather than surfacing a raw OAuth error.
 - The "unverified app" warning during sign-in is expected — it's your own client.
 
 ## Everyday use
@@ -40,7 +73,7 @@ Two things worth knowing about the Google side:
 Once the helper is installed, Drive is just a git remote — use ordinary git:
 
 ```sh
-git clone gdrive://scripts
+git clone gdrive://notes
 git push
 git pull
 git push gdrive main:trunk      # renaming refspecs work
@@ -53,14 +86,14 @@ git ls-remote gdrive
 The wrapper commands remain for the things git has no verb for:
 
 ```sh
-cd ~/scripts
+cd ~/notes
 git init && git add . && git commit -m "initial"
 
-drive-git init            # creates drive-git-remote/scripts in Drive and pushes
+drive-git init            # creates drive-git-remote/notes in Drive and pushes
 drive-git init --encrypt  # ...with client-side encryption
 drive-git status          # compare local, last-synced, and remote state
 drive-git list            # repos stored in Drive
-drive-git rm scripts      # remove a repo (goes to Drive's trash)
+drive-git rm notes        # remove a repo (goes to Drive's trash)
 drive-git unlock          # break a stale push lock
 drive-git gc              # compact the remote chain
 ```
@@ -82,12 +115,14 @@ One limitation: a repo can have one `gdrive` remote. Both the helper and the CLI
 Drive has no atomic multi-file write and no compare-and-swap, so the remote is an **append-only chain of immutable links**:
 
 ```
-drive-git-remote/scripts/
+drive-git-remote/notes/
   meta.json
-  0001-root-3f2a91c4d8be.bundle.age
-  0002-3f2a91c4d8be-77c0aa12e3f5.bundle.age
-  0003-77c0aa12e3f5-91bb04de77a1.refs.age
+  0001-root-3f2a91c4d8be.bundle
+  0002-3f2a91c4d8be-77c0aa12e3f5.bundle
+  0003-77c0aa12e3f5-91bb04de77a1.refs
 ```
+
+(With `--encrypt`, each link gains an `.age` suffix.)
 
 Each filename encodes its sequence number, the ref-set fingerprint it was built against, and the fingerprint it produces. Every link is a real `git bundle` naming the complete current ref set while carrying only new objects. Nothing is ever overwritten, so:
 
@@ -123,7 +158,7 @@ Encryption is fixed at `init` and recorded in `meta.json`. There's no converting
 
 ## Moving to a normal git remote
 
-Nothing here is a custom format — a repo synced this way is an ordinary git repo. To move to GitHub, just `git remote add origin ...` and push.
+Nothing here is a custom format — a repo synced this way is an ordinary git repo with ordinary objects. To move it to any git host, add a remote and push. There's no migration and no export step, which is the point of building on real git rather than a bespoke versioning scheme.
 
 ## Using a local directory instead of Drive
 
@@ -136,7 +171,7 @@ Caveat: a filesystem can't hold two files with the same name, so uploads overwri
 ```sh
 make check              # gofmt, vet, build, test — exactly what CI runs
 make test-live          # the Drive-API tests, against your logged-in account
-make release-snapshot    # cross-compile every release target without publishing
+make release-snapshot   # cross-compile every release target without publishing
 ```
 
 Two layers of tests:

@@ -5,17 +5,46 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/darkharasho/drive-git-remote/internal/auth"
 	"github.com/darkharasho/drive-git-remote/internal/gitx"
 	"github.com/darkharasho/drive-git-remote/internal/session"
 	"github.com/darkharasho/drive-git-remote/internal/store"
+	"github.com/darkharasho/drive-git-remote/internal/update"
 	"github.com/spf13/cobra"
 )
 
-// Version is set at build time.
+// Version is set at build time via ldflags for release builds.
 var Version = "dev"
+
+// Binaries produced by `go install module/cmd/drive-git@v1.2.3` carry no
+// ldflags, but Go records the module version in the build info. Recover it so
+// those installs report a real version and take part in update checks.
+//
+// Only a clean release tag is accepted. Go's VCS stamping also produces
+// "v0.1.0+dirty" for a working-tree build and pseudo-versions like
+// "v0.1.1-0.20250831...-abc123" for untagged commits; both would parse as a
+// release and start drawing upgrade notices that offer to overwrite a
+// hand-built binary. Those stay "dev", which the update check ignores.
+func init() {
+	if Version != "dev" {
+		return
+	}
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+	v := bi.Main.Version
+	if v == "" || v == "(devel)" || strings.ContainsAny(v, "+-") {
+		return
+	}
+	if _, ok := update.ParseVersion(v); ok {
+		Version = v
+	}
+}
 
 // NewRoot builds the command tree.
 func NewRoot() *cobra.Command {
