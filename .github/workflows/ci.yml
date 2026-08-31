@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Check formatting
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./...
+
+      # The helper suite builds the binary, installs it as git-remote-gdrive on
+      # a sandboxed PATH, and drives real git against a local-directory
+      # backend. It needs git configured enough to commit.
+      - name: Configure git
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name CI
+
+      - name: Test
+        run: go test ./... -timeout 10m
+
+  cross-compile:
+    # The project ships as a single static binary, so make sure every release
+    # target still builds on every push rather than finding out at tag time.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build all release targets
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          while read -r goos goarch; do
+            echo "==> $goos/$goarch"
+            GOOS="$goos" GOARCH="$goarch" go build -o /dev/null ./cmd/drive-git
+          done <<'TARGETS'
+          darwin arm64
+          darwin amd64
+          linux amd64
+          linux arm64
+          windows amd64
+          TARGETS

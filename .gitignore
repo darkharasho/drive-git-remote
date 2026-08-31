@@ -11,3 +11,6 @@ build
 *.log
 .superpowers
 .sai/
+
+# Local build artifacts
+/dist/

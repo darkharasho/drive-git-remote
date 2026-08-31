@@ -1,11 +1,22 @@
 # drive-git-remote
 
+[![CI](https://github.com/darkharasho/drive-git-remote/actions/workflows/ci.yml/badge.svg)](https://github.com/darkharasho/drive-git-remote/actions/workflows/ci.yml)
+
 A small Go CLI that uses a private Google Drive folder as a git remote, so personal work scripts and productivity apps can be version-controlled without pushing repos to the org's GitHub. Working folders stay ordinary local git repos, so branches, diffs, and history come free.
 
 ## Install
 
+From a [release](https://github.com/darkharasho/drive-git-remote/releases) — one static binary, no runtime:
+
 ```sh
-go build -o drive-git ./cmd/drive-git
+tar -xzf drive-git_v1.0.0_darwin_arm64.tar.gz
+mv drive-git ~/.local/bin/
+```
+
+Or from source:
+
+```sh
+make install     # builds and installs to ~/.local/bin, then installs the helper
 ```
 
 ## First run
@@ -123,10 +134,23 @@ Caveat: a filesystem can't hold two files with the same name, so uploads overwri
 ## Development
 
 ```sh
-go test ./...
+make check              # gofmt, vet, build, test — exactly what CI runs
+make test-live          # the Drive-API tests, against your logged-in account
+make release-snapshot    # cross-compile every release target without publishing
 ```
 
 Two layers of tests:
 
 - **Store** — against an in-memory fake of the Drive backend: clone/push/pull round trips, incremental bundles, encryption, compaction, lock expiry, chain validation, and the simultaneous-push race (injecting a competing link mid-upload).
 - **Helper** — real `git` driving a real built binary installed as `git-remote-gdrive`, backed by a local directory: `git clone gdrive://`, push, pull, non-fast-forward rejection, renaming and deleting refspecs, and an encrypted repo.
+- **Live** — the Drive-specific assumptions that a local directory cannot model, chiefly that Drive permits two files with the same name in one folder. Race detection depends on that, so it is asserted directly rather than assumed. Skipped unless `DRIVE_GIT_LIVE=1`.
+
+CI runs the first two on Linux and macOS, and cross-compiles every release target on each push so a broken platform surfaces before tag time.
+
+## Releasing
+
+```sh
+git tag v1.0.0 && git push origin v1.0.0
+```
+
+That triggers `.github/workflows/release.yml`, which runs the test suite, cross-compiles all five targets with the version embedded via ldflags, and publishes archives plus `checksums.txt` to a GitHub release. `make release-snapshot` does the same build locally without publishing.
